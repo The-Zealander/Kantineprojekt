@@ -9,3 +9,7 @@ https://trello.com/b/F9pn7yrV/kantineprojekt
 
 # Things
 ![img.png](img.png)
+
+# Credits / Assosiates
+DSB kvinde 2 / voice over : Karl Linus Adams Ramussen / Kål
+[Image pending]
