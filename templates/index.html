@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>NFC Tag Registry</title>
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <style>
+        /* ... your existing styles ... */
+        #scan-feedback {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            font-weight: bold;
+            text-align: center;
+        }
+        .scan-success { background-color: #d4edda; color: #155724; }
+        .scan-failure { background-color: #f8d7da; color: #721c24; }
+        .scan-info { background-color: #d1ecf1; color: #0c5460; }
+    </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+</head>
+<body>
+    <h1>NFC Tag Registry</h1>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="flash {{ category }}">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <button class="toggle-btn" onclick="toggleDebug()">Toggle Debug Panel</button>
+
+    <div id="debug-panel">
+        <h2>Add New Tag</h2>
+        <form method="POST">
+            <input type="hidden" name="add">
+            <label for="nfc_id">NFC Tag UID:</label>
+            <input type="text" name="nfc_id" required>
+            <label for="name">Owner Name:</label>
+            <input type="text" name="name" required>
+            <button type="submit">Add</button>
+        </form>
+
+        <h2>Edit Existing Tags</h2>
+        <ul>
+        {% for id, nfc_id, name in tags %}
+            <li>
+                <strong>{{ nfc_id }}</strong>
+                <form method="POST" style="display:inline;">
+                    <input type="hidden" name="update">
+                    <input type="hidden" name="tag_id" value="{{ id }}">
+                    <input type="text" name="new_name" value="{{ name }}">
+                    <button type="submit" class="update-btn">Update</button>
+                </form>
+            </li>
+        {% endfor %}
+        </ul>
+    </div>
+
+    <h2>Registered Tags</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>NFC Tag UID</th>
+                <th>Owner Name</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for id, nfc_id, name in tags %}
+            <tr>
+                <td>{{ nfc_id }}</td>
+                <td>{{ name }}</td>
+            </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+
+    <div id="scan-feedback" style="display:none;"></div>
+
+    <script>
+        function toggleDebug() {
+            var panel = document.getElementById("debug-panel");
+            panel.style.display = panel.style.display === "none" ? "block" : "none";
+        }
+
+        var socket = io.connect('http://' + document.domain + ':' + location.port);
+
+        socket.on('connect', function() {
+            console.log('Websocket connected!');
+        });
+
+        socket.on('scan_result', function(data) {
+            var feedbackDiv = document.getElementById('scan-feedback');
+            feedbackDiv.style.display = 'block';
+            if (data.authorized) {
+                feedbackDiv.className = 'scan-feedback scan-success';
+                feedbackDiv.innerText = '✅ Authorized: ' + data.name;
+            } else {
+                feedbackDiv.className = 'scan-feedback scan-failure';
+                feedbackDiv.innerText = '❌ Unauthorized: ' + (data.name ? data.name + ' - ' : '') + data.message;
+            }
+            // Optionally hide the feedback after a few seconds
+            setTimeout(function() {
+                feedbackDiv.style.display = 'none';
+            }, 3000);
+        });
+    </script>
+</body>
+</html>

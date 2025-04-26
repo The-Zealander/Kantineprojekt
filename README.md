@@ -5,3 +5,7 @@ Løsningen er et program, som kan verificere en elevs kantinestatus ved hjælp a
 
 # Trelloboard
 https://trello.com/b/F9pn7yrV/kantineprojekt
+
+
+# Things
+![img.png](img.png)
