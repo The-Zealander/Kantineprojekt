@@ -52,11 +52,13 @@
 <body>
     <h1>Tilmeld ny bruger</h1>
 
+    <form method="POST">
     <div class="nfc-id">
         NFC ID: <code>{{ uid }}</code>
     </div>
-
-    <form method="POST">
+    <!-- Gem UID som hidden input -->
+    <input type="hidden" name="uid" value="{{ uid }}">
+    <!-- resten af felterne uændret -->
         <label for="first_name">Fornavn:</label>
         <input type="text" id="first_name" name="first_name" required>
 
