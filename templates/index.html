@@ -1,111 +1,274 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="da">
 <head>
     <meta charset="UTF-8">
-    <title>NFC Tag Registry</title>
-    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kantine Terminal</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        /* ... your existing styles ... */
-        #scan-feedback {
-            margin-top: 20px;
-            padding: 15px;
-            border-radius: 5px;
-            font-weight: bold;
-            text-align: center;
+        body {
+            font-family: 'Inter', sans-serif; /* Bruger en pæn, moderne skrifttype */
         }
-        .scan-success { background-color: #d4edda; color: #155724; }
-        .scan-failure { background-color: #f8d7da; color: #721c24; }
-        .scan-info { background-color: #d1ecf1; color: #0c5460; }
+        .terminal-container {
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: 2rem;
+            background-color: #f9fafb; /* Lys grå baggrund */
+            border-radius: 0.75rem; /* Afrundede hjørner */
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05); /* Skyggeeffekt */
+        }
+        .input-field {
+            border-radius: 0.375rem; /* Afrundede hjørner for input */
+            border: 1px solid #d1d5db; /* Grå kant */
+            padding: 0.75rem 1rem;
+        }
+        .btn {
+            border-radius: 0.375rem; /* Afrundede hjørner for knap */
+            padding: 0.75rem 1.5rem;
+            font-weight: 500;
+            transition: background-color 0.3s; /* Glidende overgang for hover-effekt */
+        }
+        .btn-primary {
+            background-color: #3b82f6; /* Blå farve */
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #2563eb; /* Mørkere blå ved hover */
+        }
+        .message-box {
+            padding: 1rem;
+            border-radius: 0.375rem;
+            margin-top: 1rem;
+        }
+        .message-success {
+            background-color: #d1fae5; /* Lys grøn */
+            color: #065f46; /* Mørk grøn tekst */
+        }
+        .message-error {
+            background-color: #fee2e2; /* Lys rød */
+            color: #991b1b; /* Mørk rød tekst */
+        }
+        .message-info {
+            background-color: #e0f2fe; /* Lys blå */
+            color: #0c4a6e; /* Mørk blå tekst */
+        }
+        /* Sørger for at indhold ikke skubber layout ved visning/skjulning */
+        .hidden-content {
+            display: none;
+        }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
 </head>
-<body>
-    <h1>NFC Tag Registry</h1>
+<body class="bg-gray-100 flex items-center justify-center min-h-screen">
 
-    {% with messages = get_flashed_messages(with_categories=true) %}
-      {% if messages %}
-        {% for category, message in messages %}
-          <div class="flash {{ category }}">{{ message }}</div>
-        {% endfor %}
-      {% endif %}
-    {% endwith %}
+    <div class="terminal-container">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-700">Kantinens Terminal</h1>
+            <p class="text-gray-500">Scan din NFC-chip for at se dagens menu.</p>
+        </header>
 
-    <button class="toggle-btn" onclick="toggleDebug()">Toggle Debug Panel</button>
+        <div class="mb-6">
+            <label for="nfc_uid_input" class="block text-sm font-medium text-gray-700 mb-1">NFC Chip ID (simuleret):</label>
+            <div class="flex space-x-2">
+                <input type="text" id="nfc_uid_input" class="input-field w-full" placeholder="Indtast NFC ID her...">
+                <button id="scanButton" class="btn btn-primary">Scan</button>
+            </div>
+            <p class="text-xs text-gray-500 mt-1">I en rigtig opsætning ville dette ske automatisk via en NFC-læser.</p>
+        </div>
 
-    <div id="debug-panel">
-        <h2>Add New Tag</h2>
-        <form method="POST">
-            <input type="hidden" name="add">
-            <label for="nfc_id">NFC Tag UID:</label>
-            <input type="text" name="nfc_id" required>
-            <label for="name">Owner Name:</label>
-            <input type="text" name="name" required>
-            <button type="submit">Add</button>
-        </form>
+        <div id="messageArea" class="message-box hidden-content"></div>
 
-        <h2>Edit Existing Tags</h2>
-        <ul>
-        {% for id, nfc_id, name in tags %}
-            <li>
-                <strong>{{ nfc_id }}</strong>
-                <form method="POST" style="display:inline;">
-                    <input type="hidden" name="update">
-                    <input type="hidden" name="tag_id" value="{{ id }}">
-                    <input type="text" name="new_name" value="{{ name }}">
-                    <button type="submit" class="update-btn">Update</button>
-                </form>
-            </li>
-        {% endfor %}
-        </ul>
+        <div id="userInfoArea" class="mb-6 hidden-content">
+            <h2 class="text-xl font-semibold text-gray-700">Velkommen, <span id="userName"></span>!</h2>
+        </div>
+
+        <div id="registrationArea" class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-md hidden-content">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">Ukendt NFC Chip</h3>
+            <p class="text-sm text-gray-600 mb-3">Denne NFC chip er ikke genkendt. Vil du oprette en ny bruger?</p>
+            <label for="newUserNameInput" class="block text-sm font-medium text-gray-700 mb-1">Indtast dit navn:</label>
+            <input type="text" id="newUserNameInput" class="input-field w-full mb-3" placeholder="Fulde Navn">
+            <button id="registerButton" class="btn btn-primary w-full">Opret Bruger</button>
+        </div>
+
+        <div id="foodInfoArea" class="p-4 bg-green-50 border border-green-200 rounded-md hidden-content">
+            <h2 class="text-xl font-semibold text-gray-700 mb-2">Dagens Menu</h2>
+            <p id="foodDescription" class="text-gray-600"></p>
+            <div id="allergensInfo" class="mt-2 text-sm text-gray-500 hidden-content">
+                <h4 class="font-semibold">Allergener:</h4>
+                <p id="allergensList"></p>
+            </div>
+        </div>
+
     </div>
 
-    <h2>Registered Tags</h2>
-    <table>
-        <thead>
-            <tr>
-                <th>NFC Tag UID</th>
-                <th>Owner Name</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for id, nfc_id, name in tags %}
-            <tr>
-                <td>{{ nfc_id }}</td>
-                <td>{{ name }}</td>
-            </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-
-    <div id="scan-feedback" style="display:none;"></div>
-
     <script>
-        function toggleDebug() {
-            var panel = document.getElementById("debug-panel");
-            panel.style.display = panel.style.display === "none" ? "block" : "none";
+        // URL til din Python backend (Flask server)
+        // Sørg for at denne URL er korrekt, når du kører din backend.
+        // Hvis Flask kører på din egen maskine på port 5000, vil det typisk være http://127.0.0.1:5000
+        const API_BASE_URL = 'http://127.0.0.1:5000/api'; // Standard Flask port
+
+        // Henter referencer til HTML elementer
+        const nfcUidInput = document.getElementById('nfc_uid_input');
+        const scanButton = document.getElementById('scanButton');
+        const registerButton = document.getElementById('registerButton');
+
+        const messageArea = document.getElementById('messageArea');
+        const userInfoArea = document.getElementById('userInfoArea');
+        const userNameDisplay = document.getElementById('userName');
+        const registrationArea = document.getElementById('registrationArea');
+        const newUserNameInput = document.getElementById('newUserNameInput');
+        const foodInfoArea = document.getElementById('foodInfoArea');
+        const foodDescription = document.getElementById('foodDescription');
+        const allergensInfo = document.getElementById('allergensInfo');
+        const allergensList = document.getElementById('allergensList');
+
+        let currentNfcUid = null; // Gemmer den scannede UID for registrering
+
+        // Funktion til at vise meddelelser
+        function showMessage(message, type = 'info') {
+            messageArea.textContent = message;
+            messageArea.className = 'message-box'; // Nulstil klasser
+            if (type === 'success') {
+                messageArea.classList.add('message-success');
+            } else if (type === 'error') {
+                messageArea.classList.add('message-error');
+            } else {
+                messageArea.classList.add('message-info');
+            }
+            messageArea.classList.remove('hidden-content');
         }
 
-        var socket = io.connect('http://' + document.domain + ':' + location.port);
+        // Funktion til at skjule alle dynamiske sektioner
+        function resetDynamicAreas() {
+            userInfoArea.classList.add('hidden-content');
+            registrationArea.classList.add('hidden-content');
+            foodInfoArea.classList.add('hidden-content');
+            messageArea.classList.add('hidden-content');
+            allergensInfo.classList.add('hidden-content');
+        }
 
-        socket.on('connect', function() {
-            console.log('Websocket connected!');
-        });
-
-        socket.on('scan_result', function(data) {
-            var feedbackDiv = document.getElementById('scan-feedback');
-            feedbackDiv.style.display = 'block';
-            if (data.authorized) {
-                feedbackDiv.className = 'scan-feedback scan-success';
-                feedbackDiv.innerText = '✅ Authorized: ' + data.name;
-            } else {
-                feedbackDiv.className = 'scan-feedback scan-failure';
-                feedbackDiv.innerText = '❌ Unauthorized: ' + (data.name ? data.name + ' - ' : '') + data.message;
+        // Event listener for "Scan" knappen
+        scanButton.addEventListener('click', async () => {
+            const nfcUid = nfcUidInput.value.trim();
+            if (!nfcUid) {
+                showMessage('Indtast venligst et NFC ID.', 'error');
+                return;
             }
-            // Optionally hide the feedback after a few seconds
-            setTimeout(function() {
-                feedbackDiv.style.display = 'none';
-            }, 3000);
+
+            resetDynamicAreas(); // Nulstil visningen
+            currentNfcUid = nfcUid; // Gem UID for eventuel registrering
+
+            try {
+                // Sender NFC UID til backend
+                const response = await fetch(`${API_BASE_URL}/scan_nfc`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ nfc_uid: nfcUid }),
+                });
+
+                if (!response.ok) {
+                    // Håndterer HTTP fejl som 404, 500 etc.
+                    const errorData = await response.json().catch(() => ({ detail: "Ukendt serverfejl" }));
+                    throw new Error(errorData.detail || `Serverfejl: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.status === 'kendt_bruger') {
+                    // Bruger er genkendt
+                    userNameDisplay.textContent = data.bruger_navn;
+                    userInfoArea.classList.remove('hidden-content');
+
+                    foodDescription.textContent = data.mad_info.beskrivelse;
+                    if (data.mad_info.allergener && data.mad_info.allergener.length > 0) {
+                        allergensList.textContent = data.mad_info.allergener.join(', ');
+                        allergensInfo.classList.remove('hidden-content');
+                    } else {
+                        allergensInfo.classList.add('hidden-content');
+                    }
+                    foodInfoArea.classList.remove('hidden-content');
+                    showMessage(`Velkommen tilbage, ${data.bruger_navn}!`, 'success');
+
+                } else if (data.status === 'ukendt_bruger') {
+                    // Bruger er ikke genkendt, vis registreringsformular
+                    registrationArea.classList.remove('hidden-content');
+                    showMessage('NFC chip ikke genkendt. Opret venligst bruger.', 'info');
+                } else {
+                    showMessage(data.message || 'Ukendt svar fra server.', 'error');
+                }
+
+            } catch (error) {
+                console.error('Fejl ved scanning:', error);
+                showMessage(`Fejl: ${error.message}`, 'error');
+            }
         });
+
+        // Event listener for "Opret Bruger" knappen
+        registerButton.addEventListener('click', async () => {
+            const newName = newUserNameInput.value.trim();
+            if (!newName) {
+                showMessage('Indtast venligst et navn for den nye bruger.', 'error');
+                return;
+            }
+            if (!currentNfcUid) {
+                showMessage('Ingen NFC UID at registrere. Scan venligst først.', 'error');
+                return;
+            }
+
+            try {
+                // Sender oplysninger for ny bruger til backend
+                const response = await fetch(`${API_BASE_URL}/register_user`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ nfc_uid: currentNfcUid, user_name: newName }),
+                });
+
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ detail: "Ukendt serverfejl ved oprettelse" }));
+                    throw new Error(errorData.detail || `Serverfejl ved oprettelse: ${response.status}`);
+                }
+
+                const data = await response.json();
+
+                if (data.status === 'bruger_oprettet') {
+                    resetDynamicAreas();
+                    userNameDisplay.textContent = data.bruger_navn;
+                    userInfoArea.classList.remove('hidden-content');
+
+                    // Vis madinformation for den nye bruger
+                     if (data.mad_info && data.mad_info.beskrivelse) {
+                        foodDescription.textContent = data.mad_info.beskrivelse;
+                        if (data.mad_info.allergener && data.mad_info.allergener.length > 0) {
+                            allergensList.textContent = data.mad_info.allergener.join(', ');
+                            allergensInfo.classList.remove('hidden-content');
+                        } else {
+                            allergensInfo.classList.add('hidden-content');
+                        }
+                        foodInfoArea.classList.remove('hidden-content');
+                    } else {
+                        foodDescription.textContent = "Madinformation ikke tilgængelig lige nu.";
+                        foodInfoArea.classList.remove('hidden-content');
+                    }
+                    showMessage(`Bruger ${data.bruger_navn} oprettet og logget ind!`, 'success');
+                    newUserNameInput.value = ''; // Ryd inputfelt
+                    nfcUidInput.value = ''; // Ryd NFC inputfelt
+                    currentNfcUid = null;
+                } else {
+                    showMessage(data.message || 'Fejl ved oprettelse af bruger.', 'error');
+                }
+
+            } catch (error) {
+                console.error('Fejl ved registrering:', error);
+                showMessage(`Fejl: ${error.message}`, 'error');
+            }
+        });
+
+        // Initial nulstilling af dynamiske områder ved sideindlæsning
+        resetDynamicAreas();
     </script>
 </body>
 </html>
