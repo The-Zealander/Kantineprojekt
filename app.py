@@ -1,4 +1,3 @@
-# app.py
 from flask import Flask, render_template, request, redirect, flash, jsonify, url_for, send_from_directory
 from flask_socketio import SocketIO, emit
 import sqlite3
@@ -11,31 +10,47 @@ import atexit # Import atexit for cleanup
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'supersecretkey'
+# Initialize SocketIO with the app
 socketio = SocketIO(app)
 
 DB_FILE = "Kantinens_kunder.db"
 
 # --- Scanner Process Management ---
 # IMPORTANT: Replace 'scanner.py' with the actual path to your scanner script
+# Ensure this path is correct relative to where you run app.py
 SCANNER_SCRIPT_PATH = "scanner.py"
 scanner_process = None # Variable to hold the scanner subprocess
 
 def start_scanner_script():
     """Starts the scanner.py script in a separate process."""
     global scanner_process
+    # Check if the process is running or has finished
     if scanner_process is None or scanner_process.poll() is not None:
-        print(f"Starting scanner script: {SCANNER_SCRIPT_PATH}")
+        print(f"Attempting to start scanner script: {SCANNER_SCRIPT_PATH}")
         try:
             # Use sys.executable to ensure the script is run with the same Python interpreter
             # used for the Flask app.
             # stdout and stderr are redirected to PIPE so they don't clutter the main console
             # You could log these outputs if needed.
+            # We use bufsize=1 for line buffering, which might help with real-time output processing
             scanner_process = subprocess.Popen([sys.executable, SCANNER_SCRIPT_PATH],
                                                stdout=subprocess.PIPE,
-                                               stderr=subprocess.PIPE)
-            print(f"Scanner script started with PID: {scanner_process.pid}")
+                                               stderr=subprocess.PIPE,
+                                               text=True, # Decode output as text
+                                               bufsize=1)
+            print(f"Scanner script started successfully with PID: {scanner_process.pid}")
+
+            # Optional: Start a thread to read scanner output if you want to display it
+            # from threading import Thread
+            # def read_scanner_output(process):
+            #     for line in iter(process.stdout.readline, ''):
+            #         print(f"SCANNER_OUT: {line.strip()}")
+            #     for line in iter(process.stderr.readline, ''):
+            #         print(f"SCANNER_ERR: {line.strip()}")
+            # Thread(target=read_scanner_output, args=(scanner_process,), daemon=True).start()
+
         except FileNotFoundError:
-            print(f"Error: Scanner script not found at {SCANNER_SCRIPT_PATH}")
+            print(f"Error: Scanner script not found at '{SCANNER_SCRIPT_PATH}'. Make sure the path is correct.")
             scanner_process = None
         except Exception as e:
             print(f"Error starting scanner script: {e}")
@@ -47,14 +62,20 @@ def stop_scanner_script():
     """Stops the scanner.py script process."""
     global scanner_process
     if scanner_process is not None and scanner_process.poll() is None:
-        print(f"Stopping scanner script with PID: {scanner_process.pid}")
+        print(f"Attempting to stop scanner script with PID: {scanner_process.pid}")
         try:
-            scanner_process.terminate() # or scanner_process.kill() for forceful termination
-            scanner_process.wait(timeout=5) # Wait for process to terminate
-            print("Scanner script stopped.")
+            scanner_process.terminate() # Send SIGTERM
+            # Wait for process to terminate, with a timeout
+            stdout, stderr = scanner_process.communicate(timeout=5)
+            print("Scanner script stopped gracefully.")
+            # print("Scanner stdout:\n", stdout) # Optional: print collected output
+            # print("Scanner stderr:\n", stderr) # Optional: print collected errors
         except subprocess.TimeoutExpired:
-            print("Scanner script did not terminate gracefully, killing.")
-            scanner_process.kill()
+            print("Scanner script did not terminate gracefully within timeout, killing.")
+            scanner_process.kill() # Send SIGKILL
+            stdout, stderr = scanner_process.communicate() # Collect output after kill
+            # print("Scanner stdout:\n", stdout) # Optional: print collected output
+            # print("Scanner stderr:\n", stderr) # Optional: print collected errors
         except Exception as e:
             print(f"Error stopping scanner script: {e}")
         finally:
@@ -63,6 +84,7 @@ def stop_scanner_script():
         print("Scanner script is not running.")
 
 # Register stop_scanner_script to be called when the Flask app exits
+# This ensures the scanner process is cleaned up when you stop the Flask server
 atexit.register(stop_scanner_script)
 
 
@@ -87,6 +109,12 @@ def init_db():
             image_url TEXT
         )
     ''')
+    # Add some sample food data if the table is empty
+    cursor.execute("SELECT COUNT(*) FROM foods")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO foods (name, image_url) VALUES (?, ?)", ('Frokost Ret', '')) # Add a placeholder food item
+        conn.commit()
+
     conn.commit()
     conn.close()
 
@@ -99,14 +127,16 @@ def get_tag_by_uid(uid):
     conn.close()
     return result
 
-# Fetch food list
-def get_foods():
-    conn = sqlite3.connect(DB_FILE)
-    cursor = conn.cursor()
-    cursor.execute("SELECT name, image_url FROM foods")
-    foods = cursor.fetchall()
-    conn.close()
-    return foods
+# Fetch food list (or just the current day's food)
+# For simplicity, let's just return a static food item for now
+def get_current_food_info():
+     # In a real app, this would fetch based on the date or a selection
+     # For now, return a placeholder
+     return {
+         "beskrivelse": "Dagens ret er en lækker pastasalat med kylling og pesto.",
+         "allergener": ["Gluten", "Mælk", "Nødder"] # Example allergens
+     }
+
 
 # Add new user
 def add_user(nfc_id, name, subscription_valid_until):
@@ -177,9 +207,11 @@ def index():
     cursor.execute("SELECT id, nfc_id, name FROM users") # Fetch id for update form
     tags = cursor.fetchall()
     conn.close()
+    # Render index.html - this template will need JavaScript to handle SocketIO updates
     return render_template("index.html", tags=tags)
 
-# Subscribe new UID page (triggered by scanner.py redirect)
+# Subscribe new UID page (This route is now primarily for manual registration if needed,
+# as the scanner no longer redirects the browser)
 @app.route("/subscribe/<uid>", methods=["GET", "POST"])
 def subscribe(uid):
     if request.method == "POST":
@@ -194,6 +226,7 @@ def subscribe(uid):
              flash(f"Error: UID {uid} already exists.", "danger")
 
         # Redirect back to the main page after subscription
+        # The scanner will NOT trigger this redirect directly anymore
         return redirect(url_for("index"))
 
     # GET request: Show the subscription form
@@ -203,10 +236,12 @@ def subscribe(uid):
         flash(f"UID {uid} is already registered for {user[0]}.", "warning")
         return redirect(url_for("index"))
 
+    # Render subscribe.html - this form is for manual registration via the browser
     return render_template("subscribe.html", uid=uid)
 
 
-# Welcome page (triggered by scanner.py redirect for authorized users)
+# Welcome page (This route is now primarily for manual access if needed,
+# as the scanner no longer redirects the browser)
 @app.route("/welcome/<uid>")
 def welcome(uid):
     user = get_tag_by_uid(uid)
@@ -217,7 +252,9 @@ def welcome(uid):
             try:
                 valid_until = datetime.strptime(valid_until_str, "%Y-%m-%d")
                 if valid_until >= datetime.now():
-                    foods = get_foods()
+                    foods = get_foods() # Note: get_foods() is not implemented to return daily food
+                    # Render welcome.html - this page is for manual access via the browser
+                    # You might want to pass the daily food info here instead of all foods
                     return render_template("welcome.html", name=name, foods=foods)
                 else:
                     flash(f"Your subscription for {name} expired on {valid_until_str}.", "danger")
@@ -243,7 +280,7 @@ def api_scan():
     """
     Receives scan data from scanner.py.
     Processes the UID, determines status, and emits a SocketIO event.
-    Returns a response to scanner.py for potential browser redirect.
+    Returns a simple JSON response to scanner.py.
     """
     data = request.json
     uid = data.get("uid")
@@ -258,11 +295,12 @@ def api_scan():
             "uid": None
         })
         print("Received scan request with no UID.")
-        return jsonify({"message": "No UID provided"}), 400
+        # Return a simple JSON response as scanner.py doesn't use the redirect_url anymore
+        return jsonify({"message": "No UID provided", "status": "error"}), 400
 
     print(f"Received scan request for UID: {uid}")
 
-    # Emit processing status via SocketIO
+    # Emit processing status via SocketIO immediately
     socketio.emit('scan_result', {
         "authorized": False, # Not yet authorized
         "message": f"Processing UID: {uid}...",
@@ -272,6 +310,7 @@ def api_scan():
     })
 
     user = get_tag_by_uid(uid)
+    food_info = get_current_food_info() # Get daily food info
 
     if user:
         name, valid_until_str = user
@@ -287,11 +326,12 @@ def api_scan():
                         "message": f"Access Granted: {name}",
                         "status": "authorized",
                         "uid": uid,
-                        "redirect_url": url_for('welcome', uid=uid) # Redirect to welcome page
+                        "food_info": food_info # Include food info
                     }
                     print(f"UID {uid} is authorized: {name}")
                     socketio.emit('scan_result', result_data) # Emit authorized status
-                    return jsonify(result_data), 200
+                    # Return a simple JSON response
+                    return jsonify({"message": f"Access Granted: {name}", "status": "authorized", "name": name}), 200
                 else:
                     # Subscription expired
                     result_data = {
@@ -303,7 +343,8 @@ def api_scan():
                     }
                     print(f"UID {uid} subscription expired: {name}")
                     socketio.emit('scan_result', result_data) # Emit expired status
-                    return jsonify(result_data), 403 # Forbidden
+                    # Return a simple JSON response
+                    return jsonify({"message": f"Subscription Expired for {name}", "status": "expired", "name": name}), 403 # Forbidden
             except ValueError:
                  # Handle invalid date format in DB
                 result_data = {
@@ -315,9 +356,10 @@ def api_scan():
                 }
                 print(f"UID {uid} has invalid date format.")
                 socketio.emit('scan_result', result_data) # Emit error status
-                return jsonify(result_data), 500 # Internal Server Error
+                # Return a simple JSON response
+                return jsonify({"message": f"Error: Invalid date format for {name}", "status": "error"}), 500 # Internal Server Error
         else:
-            # Handle NULL valid_until in DB
+             # Handle NULL valid_until in DB
             result_data = {
                 "authorized": False,
                 "name": name,
@@ -327,7 +369,9 @@ def api_scan():
             }
             print(f"UID {uid} has no subscription date.")
             socketio.emit('scan_result', result_data) # Emit error status
-            return jsonify(result_data), 500 # Internal Server Error
+            # Return a simple JSON response
+            return jsonify({"message": f"Error: No subscription date for {name}", "status": "error"}), 500 # Internal Server Error
+
 
     else:
         # New card
@@ -337,11 +381,13 @@ def api_scan():
             "message": f"New card detected. Please register.",
             "status": "new",
             "uid": uid,
-            "redirect_url": url_for('subscribe', uid=uid) # Redirect to subscribe page
+            # We don't redirect the browser anymore, but the UID is needed for registration
+            "redirect_url": url_for('subscribe', uid=uid) # Kept for info, not used for redirect by scanner
         }
         print(f"UID {uid} is new.")
         socketio.emit('scan_result', result_data) # Emit new card status
-        return jsonify(result_data), 404 # Not Found
+        # Return a simple JSON response
+        return jsonify({"message": "New card detected. Please register.", "status": "new", "uid": uid}), 404 # Not Found
 
 @app.route("/api/remove", methods=["POST"])
 def api_remove():
@@ -358,30 +404,92 @@ def api_remove():
         "status": "removed", # Use a 'removed' status
         "uid": None
     })
-    return jsonify({"status": "removed"})
+    # Return a simple JSON response
+    return jsonify({"status": "removed", "message": "Card removed"})
 
+@app.route("/api/register", methods=["POST"])
+def api_register():
+    """
+    Receives registration data (UID and name) from the frontend.
+    Adds the user to the database and emits a SocketIO event.
+    """
+    data = request.json
+    uid = data.get("uid")
+    name = data.get("name")
+
+    if not uid or not name:
+        error_message = "Registration Error: Missing UID or name."
+        print(error_message)
+        socketio.emit('scan_result', {
+            "authorized": False,
+            "message": error_message,
+            "name": None,
+            "status": "error",
+            "uid": uid
+        })
+        return jsonify({"message": error_message, "status": "error"}), 400
+
+    print(f"Received registration request for UID: {uid}, Name: {name}")
+
+    # Calculate expiry date 30 days from now
+    valid_until = (datetime.now() + timedelta(days=30)).strftime("%Y-%m-%d")
+
+    if add_user(uid, name, valid_until):
+        print(f"User {name} registered successfully with UID {uid}.")
+        # Emit a success status, similar to a successful scan
+        food_info = get_current_food_info() # Get daily food info
+        result_data = {
+            "authorized": True,
+            "name": name,
+            "message": f"Welcome {name}! Registration successful.",
+            "status": "authorized", # Indicate successful registration and access
+            "uid": uid,
+            "food_info": food_info # Include food info
+        }
+        socketio.emit('scan_result', result_data) # Emit authorized status via SocketIO
+        return jsonify({"message": "Registration successful", "status": "success", "name": name, "uid": uid}), 200
+    else:
+        error_message = f"Registration Error: UID {uid} already exists."
+        print(error_message)
+        # Emit an error status
+        socketio.emit('scan_result', {
+            "authorized": False,
+            "message": error_message,
+            "name": None,
+            "status": "error",
+            "uid": uid
+        })
+        return jsonify({"message": error_message, "status": "error"}), 409 # Conflict
 
 # --- SocketIO Events ---
 
 @socketio.on('connect')
 def handle_connect():
-    print('Client connected')
-    # Optionally, emit the current status when a new client connects
-    # This requires storing the last status server-side, similar to the polling approach
-    # For simplicity here, we'll just log the connection.
-    # You could add logic here to send the last known state if needed.
+    """Handler for new SocketIO client connections."""
+    print('SocketIO client connected')
+    # When a new client connects, emit a default 'waiting' status.
+    socketio.emit('scan_result', {
+        "authorized": False,
+        "message": "Waiting for scan...",
+        "name": None,
+        "status": "waiting", # Indicate initial waiting state
+        "uid": None
+    })
+
 
 @socketio.on('disconnect')
 def handle_disconnect():
-    print('Client disconnected')
+    """Handler for SocketIO client disconnections."""
+    print('SocketIO client disconnected')
 
 
 if __name__ == "__main__":
     # Start the scanner script before running the Flask-SocketIO app
+    # This ensures the scanner is running when the web server starts
     start_scanner_script()
 
-    # Use socketio.run instead of app.run
+    # Use socketio.run instead of app.run to include the SocketIO server
     # host='0.0.0.0' makes it accessible externally (useful if scanner is on another machine)
-    # host='127.0.0.1' restricts it to the local machine
+    # host='127.0.0.1' restricts it to the local machine (safer for local development)
+    print("Starting Flask-SocketIO server...")
     socketio.run(app, debug=True, host='127.0.0.1', port=5000)
-

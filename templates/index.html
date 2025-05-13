@@ -39,6 +39,8 @@
             padding: 1rem;
             border-radius: 0.375rem;
             margin-top: 1rem;
+            text-align: center; /* Center align status messages */
+            font-weight: bold;
         }
         .message-success {
             background-color: #d1fae5; /* Lys grøn */
@@ -52,12 +54,20 @@
             background-color: #e0f2fe; /* Lys blå */
             color: #0c4a6e; /* Mørk blå tekst */
         }
+         .message-warning { /* Added warning style for new/expired */
+            background-color: #fffbeb; /* Light yellow */
+            color: #92400e; /* Dark yellow/orange text */
+        }
         /* Sørger for at indhold ikke skubber layout ved visning/skjulning */
         .hidden-content {
             display: none;
         }
+        .status-text {
+            font-size: 1.25rem; /* Større tekst for status */
+        }
     </style>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
 </head>
 <body class="bg-gray-100 flex items-center justify-center min-h-screen">
 
@@ -67,16 +77,9 @@
             <p class="text-gray-500">Scan din NFC-chip for at se dagens menu.</p>
         </header>
 
-        <div class="mb-6">
-            <label for="nfc_uid_input" class="block text-sm font-medium text-gray-700 mb-1">NFC Chip ID (simuleret):</label>
-            <div class="flex space-x-2">
-                <input type="text" id="nfc_uid_input" class="input-field w-full" placeholder="Indtast NFC ID her...">
-                <button id="scanButton" class="btn btn-primary">Scan</button>
-            </div>
-            <p class="text-xs text-gray-500 mt-1">I en rigtig opsætning ville dette ske automatisk via en NFC-læser.</p>
+        <div id="statusArea" class="message-box message-info mb-6">
+            <p id="statusMessage" class="status-text">Forbinder til server...</p>
         </div>
-
-        <div id="messageArea" class="message-box hidden-content"></div>
 
         <div id="userInfoArea" class="mb-6 hidden-content">
             <h2 class="text-xl font-semibold text-gray-700">Velkommen, <span id="userName"></span>!</h2>
@@ -84,7 +87,7 @@
 
         <div id="registrationArea" class="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-md hidden-content">
             <h3 class="text-lg font-semibold text-gray-700 mb-2">Ukendt NFC Chip</h3>
-            <p class="text-sm text-gray-600 mb-3">Denne NFC chip er ikke genkendt. Vil du oprette en ny bruger?</p>
+            <p class="text-sm text-gray-600 mb-3">Denne NFC chip (<span id="newUidDisplay"></span>) er ikke genkendt. Vil du oprette en ny bruger?</p>
             <label for="newUserNameInput" class="block text-sm font-medium text-gray-700 mb-1">Indtast dit navn:</label>
             <input type="text" id="newUserNameInput" class="input-field w-full mb-3" placeholder="Fulde Navn">
             <button id="registerButton" class="btn btn-primary w-full">Opret Bruger</button>
@@ -102,21 +105,19 @@
     </div>
 
     <script>
-        // URL til din Python backend (Flask server)
-        // Sørg for at denne URL er korrekt, når du kører din backend.
-        // Hvis Flask kører på din egen maskine på port 5000, vil det typisk være http://127.0.0.1:5000
-        const API_BASE_URL = 'http://127.0.0.1:5000/api'; // Standard Flask port
+        // Connect to the Socket.IO server
+        // Assumes Flask-SocketIO is running on the same host and port as the Flask app
+        var socket = io.connect('http://' + document.domain + ':' + location.port);
 
         // Henter referencer til HTML elementer
-        const nfcUidInput = document.getElementById('nfc_uid_input');
-        const scanButton = document.getElementById('scanButton');
-        const registerButton = document.getElementById('registerButton');
-
-        const messageArea = document.getElementById('messageArea');
+        const statusArea = document.getElementById('statusArea');
+        const statusMessage = document.getElementById('statusMessage');
         const userInfoArea = document.getElementById('userInfoArea');
         const userNameDisplay = document.getElementById('userName');
         const registrationArea = document.getElementById('registrationArea');
+        const newUidDisplay = document.getElementById('newUidDisplay'); // Element to display the new UID
         const newUserNameInput = document.getElementById('newUserNameInput');
+        const registerButton = document.getElementById('registerButton');
         const foodInfoArea = document.getElementById('foodInfoArea');
         const foodDescription = document.getElementById('foodDescription');
         const allergensInfo = document.getElementById('allergensInfo');
@@ -124,126 +125,70 @@
 
         let currentNfcUid = null; // Gemmer den scannede UID for registrering
 
-        // Funktion til at vise meddelelser
-        function showMessage(message, type = 'info') {
-            messageArea.textContent = message;
-            messageArea.className = 'message-box'; // Nulstil klasser
-            if (type === 'success') {
-                messageArea.classList.add('message-success');
-            } else if (type === 'error') {
-                messageArea.classList.add('message-error');
-            } else {
-                messageArea.classList.add('message-info');
+        // Funktion til at opdatere statusvisningen
+        function updateStatusDisplay(message, statusType = 'info') {
+            statusMessage.textContent = message;
+            statusArea.className = 'message-box'; // Nulstil klasser
+             // Add status-specific classes
+            if (statusType === 'success') {
+                statusArea.classList.add('message-success');
+            } else if (statusType === 'error') {
+                statusArea.classList.add('message-error');
+            } else if (statusType === 'warning') { // Use warning for new/expired
+                 statusArea.classList.add('message-warning');
             }
-            messageArea.classList.remove('hidden-content');
+            else { // Default info style for processing, waiting, removed
+                statusArea.classList.add('message-info');
+            }
         }
 
-        // Funktion til at skjule alle dynamiske sektioner
+
+        // Funktion til at skjule alle dynamiske sektioner (info, registration, food)
         function resetDynamicAreas() {
             userInfoArea.classList.add('hidden-content');
             registrationArea.classList.add('hidden-content');
             foodInfoArea.classList.add('hidden-content');
-            messageArea.classList.add('hidden-content');
             allergensInfo.classList.add('hidden-content');
         }
 
-        // Event listener for "Scan" knappen
-        scanButton.addEventListener('click', async () => {
-            const nfcUid = nfcUidInput.value.trim();
-            if (!nfcUid) {
-                showMessage('Indtast venligst et NFC ID.', 'error');
-                return;
-            }
-
-            resetDynamicAreas(); // Nulstil visningen
-            currentNfcUid = nfcUid; // Gem UID for eventuel registrering
-
-            try {
-                // Sender NFC UID til backend
-                const response = await fetch(`${API_BASE_URL}/scan_nfc`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ nfc_uid: nfcUid }),
-                });
-
-                if (!response.ok) {
-                    // Håndterer HTTP fejl som 404, 500 etc.
-                    const errorData = await response.json().catch(() => ({ detail: "Ukendt serverfejl" }));
-                    throw new Error(errorData.detail || `Serverfejl: ${response.status}`);
-                }
-
-                const data = await response.json();
-
-                if (data.status === 'kendt_bruger') {
-                    // Bruger er genkendt
-                    userNameDisplay.textContent = data.bruger_navn;
-                    userInfoArea.classList.remove('hidden-content');
-
-                    foodDescription.textContent = data.mad_info.beskrivelse;
-                    if (data.mad_info.allergener && data.mad_info.allergener.length > 0) {
-                        allergensList.textContent = data.mad_info.allergener.join(', ');
-                        allergensInfo.classList.remove('hidden-content');
-                    } else {
-                        allergensInfo.classList.add('hidden-content');
-                    }
-                    foodInfoArea.classList.remove('hidden-content');
-                    showMessage(`Velkommen tilbage, ${data.bruger_navn}!`, 'success');
-
-                } else if (data.status === 'ukendt_bruger') {
-                    // Bruger er ikke genkendt, vis registreringsformular
-                    registrationArea.classList.remove('hidden-content');
-                    showMessage('NFC chip ikke genkendt. Opret venligst bruger.', 'info');
-                } else {
-                    showMessage(data.message || 'Ukendt svar fra server.', 'error');
-                }
-
-            } catch (error) {
-                console.error('Fejl ved scanning:', error);
-                showMessage(`Fejl: ${error.message}`, 'error');
-            }
+        // Event handler for the 'connect' event
+        socket.on('connect', function() {
+            console.log('Connected to Socket.IO server');
+            updateStatusDisplay('Forbundet. Afventer scanning...', 'info');
+            resetDynamicAreas(); // Reset display on connect
         });
 
-        // Event listener for "Opret Bruger" knappen
-        registerButton.addEventListener('click', async () => {
-            const newName = newUserNameInput.value.trim();
-            if (!newName) {
-                showMessage('Indtast venligst et navn for den nye bruger.', 'error');
-                return;
-            }
-            if (!currentNfcUid) {
-                showMessage('Ingen NFC UID at registrere. Scan venligst først.', 'error');
-                return;
-            }
+        // Event handler for the 'disconnect' event
+        socket.on('disconnect', function() {
+            console.log('Disconnected from Socket.IO server');
+            updateStatusDisplay('Forbindelse afbrudt. Kan ikke scanne.', 'error');
+            resetDynamicAreas(); // Reset display on disconnect
+        });
 
-            try {
-                // Sender oplysninger for ny bruger til backend
-                const response = await fetch(`${API_BASE_URL}/register_user`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ nfc_uid: currentNfcUid, user_name: newName }),
-                });
+        // Event handler for the 'scan_result' event from the server
+        socket.on('scan_result', function(data) {
+            console.log('Received scan_result:', data);
+            resetDynamicAreas(); // Always reset dynamic areas before showing new info
 
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({ detail: "Ukendt serverfejl ved oprettelse" }));
-                    throw new Error(errorData.detail || `Serverfejl ved oprettelse: ${response.status}`);
-                }
+            currentNfcUid = data.uid; // Store UID for potential registration
 
-                const data = await response.json();
-
-                if (data.status === 'bruger_oprettet') {
-                    resetDynamicAreas();
-                    userNameDisplay.textContent = data.bruger_navn;
+            switch (data.status) {
+                case 'waiting':
+                    updateStatusDisplay(data.message || 'Afventer scanning...', 'info');
+                    break;
+                case 'processing':
+                     updateStatusDisplay(data.message || 'Behandler scanning...', 'info');
+                    break;
+                case 'authorized':
+                    updateStatusDisplay(data.message || `Adgang givet for ${data.name}!`, 'success');
+                    userNameDisplay.textContent = data.name;
                     userInfoArea.classList.remove('hidden-content');
 
-                    // Vis madinformation for den nye bruger
-                     if (data.mad_info && data.mad_info.beskrivelse) {
-                        foodDescription.textContent = data.mad_info.beskrivelse;
-                        if (data.mad_info.allergener && data.mad_info.allergener.length > 0) {
-                            allergensList.textContent = data.mad_info.allergener.join(', ');
+                    // Display food info if available
+                    if (data.food_info && data.food_info.beskrivelse) {
+                        foodDescription.textContent = data.food_info.beskrivelse;
+                        if (data.food_info.allergener && data.food_info.allergener.length > 0) {
+                            allergensList.textContent = data.food_info.allergener.join(', ');
                             allergensInfo.classList.remove('hidden-content');
                         } else {
                             allergensInfo.classList.add('hidden-content');
@@ -253,22 +198,81 @@
                         foodDescription.textContent = "Madinformation ikke tilgængelig lige nu.";
                         foodInfoArea.classList.remove('hidden-content');
                     }
-                    showMessage(`Bruger ${data.bruger_navn} oprettet og logget ind!`, 'success');
-                    newUserNameInput.value = ''; // Ryd inputfelt
-                    nfcUidInput.value = ''; // Ryd NFC inputfelt
-                    currentNfcUid = null;
-                } else {
-                    showMessage(data.message || 'Fejl ved oprettelse af bruger.', 'error');
-                }
-
-            } catch (error) {
-                console.error('Fejl ved registrering:', error);
-                showMessage(`Fejl: ${error.message}`, 'error');
+                    break;
+                case 'expired':
+                    updateStatusDisplay(data.message || `Abonnement udløbet for ${data.name}.`, 'warning');
+                    // Optionally show user name even if expired
+                    userNameDisplay.textContent = data.name;
+                    userInfoArea.classList.remove('hidden-content');
+                    break;
+                case 'new':
+                    updateStatusDisplay(data.message || 'Ukendt kort! Registrer venligst.', 'warning');
+                    newUidDisplay.textContent = data.uid || 'N/A'; // Display the UID for registration
+                    registrationArea.classList.remove('hidden-content');
+                    newUserNameInput.value = ''; // Clear name input field
+                    break;
+                 case 'removed': // Handle card removed status
+                    updateStatusDisplay(data.message || 'Kort fjernet. Afventer scanning...', 'info');
+                    break;
+                case 'error':
+                    updateStatusDisplay(data.message || 'Der opstod en fejl.', 'error');
+                    break;
+                default:
+                    updateStatusDisplay('Ukendt status modtaget.', 'error');
+                    break;
             }
         });
 
-        // Initial nulstilling af dynamiske områder ved sideindlæsning
+        // Event listener for "Opret Bruger" knappen
+        registerButton.addEventListener('click', async () => {
+            const newName = newUserNameInput.value.trim();
+            if (!newName) {
+                updateStatusDisplay('Indtast venligst et navn for den nye bruger.', 'error');
+                return;
+            }
+            if (!currentNfcUid) {
+                updateStatusDisplay('Ingen NFC UID at registrere. Scan venligst først.', 'error');
+                return;
+            }
+
+            resetDynamicAreas(); // Hide registration form while processing
+            updateStatusDisplay('Opretter bruger...', 'info');
+
+            try {
+                // Send registration data to the new API endpoint
+                const response = await fetch('/api/register', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ uid: currentNfcUid, name: newName }),
+                });
+
+                // The server will emit a 'scan_result' event upon success/failure,
+                // which the socket.on('scan_result', ...) handler will process.
+                // We just need to handle potential network errors here.
+                 if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({ message: "Ukendt serverfejl ved oprettelse" }));
+                     throw new Error(errorData.message || `Serverfejl ved oprettelse: ${response.status}`);
+                 }
+
+                 // No need to process the response JSON here, as the status update
+                 // will come via the SocketIO event emitted by the server.
+                 console.log("Registration request sent. Awaiting SocketIO update.");
+
+
+            } catch (error) {
+                console.error('Fejl ved registrering:', error);
+                updateStatusDisplay(`Fejl ved registrering: ${error.message}`, 'error');
+                 // If registration fails via fetch, show the registration area again
+                 registrationArea.classList.remove('hidden-content');
+                 newUidDisplay.textContent = currentNfcUid || 'N/A';
+            }
+        });
+
+        // Initial state when the page loads
         resetDynamicAreas();
+        // The 'connect' event handler will set the initial 'waiting' status
     </script>
 </body>
 </html>
